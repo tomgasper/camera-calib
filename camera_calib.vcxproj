@@ -153,9 +153,13 @@
   <ItemGroup>
     <ClCompile Include="cameraCalibration.cpp" />
     <ClCompile Include="calibrate.cpp" />
+    <ClCompile Include="utilities.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="cameraCalibration.h" />
+    <ClInclude Include="imagePointsData.h" />
+    <ClInclude Include="utilities.h" />
+    <ClInclude Include="worldPointsData.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -1,28 +1,94 @@
 #include "CameraCalibration.h"
+#include "utilities.h"
 
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/calib3d.hpp>
 
+#include <opencv2/core/types_c.h>
+
 #include <vector>
+#include <fstream>
 #include <iostream>
 #include <assert.h>
 #include <math.h>
+
+#include "worldPointsData.h"
+#include "imagePointsData.h"
 
 using namespace MY;
 using namespace cv;
 
 CameraCalibration camCalib;
 
-void CameraCalibration::FindPairs(int C_WIDTH, int C_HEIGHT, std::vector<std::vector<Point3f>>& wPoints, std::vector<std::vector<Point2f>>& iPoints)
+bool CameraCalibration::ReadDataFromFile(std::string modelFile, std::string imageFile, std::vector<std::vector<cv::Point2f>>& i_pts_arr, std::vector<std::vector<cv::Point3f>>& w_pts_arr)
 {
-	int CHECKERBOARD[2]{ 6,8 };
+	worldPointsData input_w_pts;
+	imagePointsData input_i_pts;
+	std::ifstream model_pts_stream, image_pts_stream;
 
-	std::cout << "Hello World!\n";
+	// read from model/target points file
+	model_pts_stream.open(modelFile);
+	while (!model_pts_stream.eof())
+	{
+		try
+		{
+			model_pts_stream >> input_w_pts;
+		}
+		catch (const std::invalid_argument& ia) {
+			std::cerr << "Model points stream: " << ia.what() << '\n';
+		}
+	}
+	model_pts_stream.close();
 
-	Mat checkboard_1 = imread("./data/img_1.jpg");
-	namedWindow("checkboard");
+	// read from image points file
+	image_pts_stream.open(imageFile);
+	while (!image_pts_stream.eof())
+	{
+		try
+		{
+			image_pts_stream >> input_i_pts;
+		}
+		catch (const std::invalid_argument& ia) {
+			std::cerr << "Image Points stream: " << ia.what() << '\n';
+		}
+	}
+	image_pts_stream.close();
+
+
+	std::vector<cv::Point3f> w_pts;
+	input_w_pts.getData(w_pts);
+	std::vector<cv::Point2f> i_pts;
+	input_i_pts.getData(i_pts);
+
+	int N_PAIRS = w_pts.size();
+	int N_VIEWS = i_pts.size() / w_pts.size();
+
+	// copy data to provided arrays
+	for (int i = 0; i < N_VIEWS; i++)
+	{
+		w_pts_arr.push_back(w_pts);
+	}
+
+	
+	for (int i = 0; i < N_VIEWS; i++)
+	{
+		std::vector<cv::Point2f> sub_arr;
+		for (int j = 0; j < N_PAIRS; j++)
+		{
+			sub_arr.push_back(i_pts[(i * N_PAIRS) + j]);
+		}
+	i_pts_arr.push_back(sub_arr);
+	}
+
+	return true;
+}
+
+void CameraCalibration::FindPairs(std::string imgs_dir, int C_WIDTH, int C_HEIGHT, std::vector<std::vector<Point3f>>& wPoints, std::vector<std::vector<Point2f>>& iPoints)
+{
+	int CHECKERBOARD[2]{ C_WIDTH,C_HEIGHT };
+	namedWindow("Camera Calibration");
 
 	// now finally calibrate camera
 
@@ -33,27 +99,46 @@ void CameraCalibration::FindPairs(int C_WIDTH, int C_HEIGHT, std::vector<std::ve
 
 	std::vector<String> imgs;
 
-	std::string path = "./data/*.jpg";
+	std::string path = imgs_dir + "\*.jpg";
 
 	// load all string dirs into specified vector list
 	glob(path, imgs);
 
 	// define world coords for 3d points
+	std::ofstream m_points_stream;
+	m_points_stream.open(".\\data\\model_points.txt");
 
-	for (int i = 0; i < CHECKERBOARD[0]; i++)
+	for (int i = 0; i < CHECKERBOARD[1]; i++)
 	{
-		for (int j = 0; j < CHECKERBOARD[1]; j++)
+		for (int j = 0; j < CHECKERBOARD[0]; j++)
 		{
-			initWorldPoints.push_back(Point3f(j, i, 1));
-			std::cout << Point3f(j, i, 1) << std::endl;
+			// assumed that the points are at X,Y,Z, where Z = 0 - > X,Y,0
+			// [	1	0	0	0	]		[	X'	]
+			// [	0	1	0	0	]	*	[	Y'	]
+			// [	0	0	1	0	]		[	Z'	]
+			//								[	1	]
+
+			initWorldPoints.push_back(Point3f(j, i, 0));
+
+			std::stringstream input;
+
+			input << "[" << j << "," << i << "," << 1 << "]";
+			
+			m_points_stream << input.str();
+			m_points_stream << '\n';
 		}
 	}
 
+	m_points_stream.close();
+
 	// loop over all imgs
 	std::vector<Point2f> corners;
-	Size p_size(6, 8);
+	Size p_size(8, 6);
 	Mat frame, gray, resized;
 	bool success;
+
+	std::ofstream w_points_stream;
+	w_points_stream.open(".\\data\\image_points.txt");
 
 
 	for (int i = 0; i < imgs.size(); i++)
@@ -74,19 +159,31 @@ void CameraCalibration::FindPairs(int C_WIDTH, int C_HEIGHT, std::vector<std::ve
 
 			wPoints.push_back(initWorldPoints);
 			iPoints.push_back(corners);
+
+			// write to txt file
+			for (int i = 0; i < corners.size(); i++)
+			{
+				std::stringstream ss;
+
+				ss << "[" << corners[i].x << "," << corners[i].y << "]";
+				ss << '\n';
+				w_points_stream << ss.str();
+			}
 		}
 
-		imshow("checkboard", gray);
-		waitKey(10);
+		imshow("Camera Calibration", gray);
+		cv::waitKey(10);
 	}
+
+	w_points_stream.close();
 }
 void CameraCalibration::Build_L(std::vector<cv::Point2f> m, std::vector<cv::Point3f> M, std::vector<std::vector<float>>& L)
 {
 	// # of image pairs = m.size()/M.size()
 	for (unsigned int i = 0; i < M.size(); i++)
 	{
-		std::vector<float> L_row_1{ -M[i].x ,-M[i].y, -M[i].z, 0, 0, 0, (m[i].x * M[i].x), (m[i].x * M[i].y),m[i].x };
-		std::vector<float> L_row_2{ 0,  0,   0, -M[i].x, -M[i].y, -M[i].z, ( m[i].y * M[i].x), (m[i].y * M[i].y),m[i].y };
+		std::vector<float> L_row_1{ M[i].x ,M[i].y, 1, 0, 0, 0, -(m[i].x * M[i].x), -(m[i].x * M[i].y),-m[i].x };
+		std::vector<float> L_row_2{ 0,  0,   0, M[i].x,M[i].y, 1, -( m[i].y * M[i].x), -(m[i].y * M[i].y),-m[i].y };
 
 		// add new rows to L-2d vector
 		L.push_back(L_row_1);
@@ -140,139 +237,53 @@ void CameraCalibration::CalculateNormMatrix(std::vector<T1> data, cv::Mat& N_mat
 
 }
 
-// not working properly currently
-cv::Point3f CameraCalibration::ToRodriguezVec(cv::Mat& R)
+void CameraCalibration::ComposeParamVec(cv::Mat& A, cv::Point2d& k, std::vector<cv::Mat>& W_arr, cv::Mat& P)
 {
-	// define p and c
-	cv::Point3f p{  (R.at<float>(2,1) - R.at<float>(1,2)) / (float)2,
-					(R.at<float>(0,2) - R.at<float>(2,0)) / (float)2,
-					(R.at<float>(1,0) - R.at<float>(0,1)) / (float)2, };
-
-	float c = R.at<float>(0, 0) + R.at<float>(1, 1) + R.at<float>(2, 2);
-	c = (c - (float)1) / (float)2;
-
-	float p_mag = sqrt( (p.x * p.x) + (p.y * p.y) + (p.z * p.z));
-	cv::Mat u(3, 1, CV_32F);
-
-	if (p_mag == (float)0)
-	{
-		if (c == (float)1)
-		{
-			p = { 0,0,0 };
-		}
-		else if (c == -1)
-		{
-			cv::Mat R_a(3, 3, CV_32F);
-			float I_data[3][3] = {
-				1.,0,0,
-				0,1.,0,
-				0,0,1.
-			};
-			cv::Mat I(3, 3, CV_32F, I_data);
-
-			R_a = R + I;
-
-			cv::Mat R_a_t = R_a.t();
-
-			// Find columnn vector of R_a with max norm
-			float max_norm = -INFINITY;
-			int max_norm_indx = -1;
-
-			cv::Mat v(1, 3, CV_32F);
-
-			for (unsigned int i = 0; i < R_a_t.rows; i++)
-			{
-				float* row = R_a_t.ptr<float>(i);
-
-				for (unsigned int j = 0; j < R_a_t.cols; j++)
-				{
-					if (row[j] > max_norm) max_norm_indx = i;
-				}
-			}
-
-			R_a_t.row(max_norm_indx).copyTo(v.row(0));
-			v.t();
-			float v_mag = sqrt((v.at<float>(0, 0) * v.at<float>(0, 0)) + (v.at<float>(1, 0) * v.at<float>(1, 0)) + (v.at<float>(2, 0) * v.at<float>(2, 0)));
-
-			u = v / v_mag;
-
-			bool cond1 = u.at<float>(0, 0) < (float)0;
-			bool cond2 = u.at<float>(0, 0) == (float)0 && u.at<float>(1, 0) < (float)0;
-			bool cond3 = u.at<float>(0, 0) == u.at<float>(1, 0) == (float)0;
-			bool cond4 = u.at<float>(2, 0) < (float)0;
-
-
-			if (u.at<float>(0, 0) < (float)0 || (u.at<float>(0, 0) == (float)0 && u.at<float>(1, 0) < (float)0) || (u.at<float>(0, 0) == u.at<float>(1, 0) == (float)0 || u.at<float>(2, 0) < 0.))
-			{
-				u = -u;
-			}
-
-			if (cond1 || cond2 || cond3 || cond4)
-			{
-				std::cout << "TRUE" << std::endl;
-			}
-
-			p.x = p_mag * u.at<float>(0, 0);
-			p.y = p_mag * u.at<float>(1, 0);
-			p.z = p_mag * u.at<float>(2, 0);
-		}
-		else { p.x = std::numeric_limits<float>::quiet_NaN(); p.y = std::numeric_limits<float>::quiet_NaN(); p.z = std::numeric_limits<float>::quiet_NaN(); }
-	}
-	else
-	{
-
-		float u_data[3][1]{
-			p.x / p_mag,
-			p.y / p_mag,
-			p.z / p_mag
-		};
-
-		cv::Mat u_case_3(3, 1, CV_32F, u_data);
-		u = u_case_3;
-
-		float theta = atan2(p_mag, c);
-
-		p.x = theta * u.at<float>(0, 0);
-		p.y = theta * u.at<float>(1, 0);
-		p.z = theta * u.at<float>(2, 0);
-	}
-
-	return p;
-}
-
-void CameraCalibration::ComposeParamVec(cv::Mat& A, cv::Point2f& k, std::vector<cv::Mat>& W_arr, cv::Mat& P)
-{
-	float a[7] { A.at<float>(0,0), A.at<float>(1,1), A.at<float>(0,1), A.at<float>(0,2), A.at<float>(1,2), k.x, k.y };
+	// CHANGE TO FLOAT64
+	double a[7] { A.at<double>(0,0), A.at<double>(1,1), A.at<double>(0,1), A.at<double>(0,2), A.at<double>(1,2), k.x, k.y };
 
 	// init Z with intrinsic values
-	cv::Mat Z(1, 7, CV_32F, a);
+	cv::Mat Z(1, 7, CV_64F, a);
 
 	// copy Z to P mat accessed by a pointer
-	Z.copyTo(P);
 
 	for (unsigned int i = 0; i < W_arr.size(); i++)
 	{
-		cv::Mat R(3, 3, CV_32F);
+		cv::Mat R(3, 3, CV_64F);
 		cv::Rect R_roi(0, 0, 3, 3);
 		W_arr[i](R_roi).copyTo(R);
 
-		cv::Mat p(3, 1, CV_32F);
+		cv::Mat p(1, 3, CV_64F);
+		cv::Mat t(1, 3, CV_64F);
+
+		t = W_arr[i].col(3).t();
 
 		// rotation matrix to rodrigues vector
 		cv::Rodrigues(R, p);
-		
-		// push back rodruges vector and transpose vector from the current view matrix
-		P.push_back(p);
-		P.push_back(W_arr[i].col(4).t());
+
+		// connect cols of rotation params and translation
+		cv::Mat matArr[]{ Z, p.t(), t  };
+		hconcat(matArr, 3,  Z);
 	}
+
+	Z.copyTo(P);
 }
+
+
 
 std::vector<float> Build_v(std::vector<std::vector<float>>& H, int i, int j)
 {
-	std::vector<float> v = {
-		H[i][0] * H[j][0], (H[i][0] * H[j][1]) + (H[i][1] * H[j][0]), H[i][1] * H[j][1],
-		(H[i][2] * H[j][0]) + (H[i][0] * H[j][2]), (H[i][2] * H[j][1] + H[i][1] * H[j][2]), H[i][2] * H[j][2]
-	};
+
+	// variables for debugging reasons
+	float val_1 = H[0][i] * H[0][j];
+	float val_2 = (H[0][i] * H[1][j]) + (H[1][i] * H[0][j]);
+	float val_3 = H[1][i] * H[1][j];
+	float val_4 = (H[2][i] * H[0][j]) + (H[0][i] * H[2][j]);
+	float val_5 = (H[2][i] * H[1][j] + H[1][i] * H[2][j]);
+	float val_6 = H[2][i] * H[2][j];
+
+
+	std::vector<float> v = { val_1, val_2, val_3, val_4, val_5 , val_6 };
 
 	return v;
 
@@ -305,8 +316,8 @@ void CameraCalibration::Build_V(std::vector<std::vector<std::vector<float>>>& H,
 }
 bool CameraCalibration::FindHomography(std::vector<Point3f>& wPoints, std::vector<Point2f>& iPoints, std::vector<std::vector<float>>& H_data)
 {
-	// x = [h1^T, h2^T, h3^T] <-- we are looking for these values
-	// we are going to find it by finding eigenvectors of L^T*L
+	// x = [h1^T, h2^T, h3^T] <-- we are looking for x
+	// we are going to solve it by finding eigenvectors of L^T*L
 	// eigenvector corresponding to the smallest eigenvalue of L^T*L is the solution to L*x=0
 
 	Mat eigenvectors(9, 9, CV_32F);
@@ -329,11 +340,11 @@ bool CameraCalibration::FindHomography(std::vector<Point3f>& wPoints, std::vecto
 		// { 0.,  s_y , -s_y * y_mean } *   [ Y ]
 		// { 0. ,   0. ,       1.     }     [ Z ]
 
-		cv::Mat w_val_mat = N_mat_world*cv::Mat(wPoints[w], false);
+		// Note that we are dropping Z=0 for every target point -> so P = [X,Y]^T and then we make it a homogenous coord -> P' = [X,Y,1]^T
+		// and only after that we apply norm matrix
+		cv::Point3f hom_w_p = { wPoints[w].x,wPoints[w].y, 1 };
+		cv::Mat w_val_mat = N_mat_world*cv::Mat(hom_w_p, false);
 		cv::Point3f p_w(w_val_mat);
-
-		std::cout << N_mat_world << std::endl;
-		std::cout << wPoints[w] << std::endl;
 
 		cv::Point3f i_hom = { iPoints[w].x, iPoints[w].y, 1 };
 		cv::Mat i_val_mat = N_mat_image * cv::Mat(i_hom, false);
@@ -349,8 +360,6 @@ bool CameraCalibration::FindHomography(std::vector<Point3f>& wPoints, std::vecto
 
 	cv::Mat L_mat(0, L_data[0].size(), cv::DataType<float>::type);
 	vector_to_mat(L_data, L_mat);
-
-	std::cout << "CameraCalibration::FindHomography:: L_Mat: " << L_mat << std::endl;
 
 	// L^TL 9x9 matrix
 	Mat LT_L_mat = L_mat.t() * L_mat;
@@ -375,13 +384,6 @@ bool CameraCalibration::FindHomography(std::vector<Point3f>& wPoints, std::vecto
 		eigenvectors.row(s_eigenval).copyTo(s_eigenv.row(0));
 	}
 
-	std::cout << "Eigenvectors: " << std::endl;
-	std::cout << eigenvectors << std::endl;
-	std::cout << "Eigenvalues: " << std::endl;
-	std::cout << eigenvalues << std::endl;
-	std::cout << "H vector: " << std::endl;
-	std::cout << s_eigenv << std::endl;
-
 	// lets construct and return our newly found H matrix
 
 	int const H_rows = 3;
@@ -405,15 +407,11 @@ bool CameraCalibration::FindHomography(std::vector<Point3f>& wPoints, std::vecto
 
 	cv::Mat H_norm(0, 3, CV_32F, DataType<float>::type);
 	camCalib.vector_to_mat(H_data, H_norm);
-	std::cout << "H Normalized matrix: " << std::endl;
-	std::cout << H_norm << std::endl;
 	cv::Mat H_denorm_1 = H_norm * N_mat_world;
-	std::cout << "Inverse of normalize image matrix: " << std::endl;
-	std::cout << N_mat_image.inv() << std::endl;
 	cv::Mat H_denorm = N_mat_image.inv() * H_norm * N_mat_world;
-	std::cout << "Normalize world matrix: " << std::endl;
-	std::cout << N_mat_world << std::endl;
 
+
+	float X_data[3] = {wPoints[5].x, wPoints[5].y, wPoints[5].z };
 	// convert to std::vector
 
 	std::vector<std::vector<float>> H_denorm_out;
@@ -430,14 +428,18 @@ bool CameraCalibration::FindHomography(std::vector<Point3f>& wPoints, std::vecto
 		}
 	}
 
-	std::cout << H_denorm << std::endl;
-
 	H_data = H_denorm_out;
+
+	// Print for calibrate.cpp
+	std::cout << H_denorm << std::endl;
+	std::cout << "" << std::endl;
 
 	return true;
 
 }
-bool CameraCalibration::vector_to_mat(std::vector<std::vector<float>>& v, cv::Mat& mat)
+
+template<typename T1>
+bool CameraCalibration::vector_to_mat(std::vector<std::vector<T1>>& v, cv::Mat& mat)
 {
 	// if (mat.empty() == false) return false;
 
@@ -450,6 +452,23 @@ bool CameraCalibration::vector_to_mat(std::vector<std::vector<float>>& v, cv::Ma
 	}
 	return true;
 }
+
+template<typename T1>
+bool CameraCalibration::vector_to_mat_double(std::vector<std::vector<T1>>& v, cv::Mat& mat)
+{
+	// if (mat.empty() == false) return false;
+
+	int v_row_width = v[0].size();
+	for (unsigned int i = 0; i < v.size(); i++)
+	{
+		cv::Mat row(1, v_row_width, cv::DataType<double>::type, v[i].data());
+
+		mat.push_back(row.clone());
+	}
+	return true;
+}
+
+
 
 void CameraCalibration::mat_to_vec(cv::Mat& mat, std::vector<std::vector<float>>& v)
 {
@@ -482,12 +501,22 @@ void CameraCalibration::ExtractIntrinsicParams(std::vector<float>& b, cv::Mat& K
 	double B_23 = b[4];
 	double B_33 = b[5];
 
-	double v_0 = (B_12 * B_13 - B_11 * B_23) / (B_11 * B_22 - B_12 * B_12);
+	/*double v_0 = (B_12 * B_13 - B_11 * B_23) / (B_11 * B_22 - B_12 * B_12);
 	double s = B_33 - ( B_13 * B_13 + v_0*(B_12 * B_13) - (B_11 * B_23) / B_11);
 	double a = sqrt( s/ B_11 );
-	double beta = sqrt( (s * B_11) / (B_11 * B_22 - (B_12 * B_12)));
+	double beta = sqrt( (s * B_11) / ((B_11 * B_22) - (B_12 * B_12)));
 	double y = -B_12 * a * a * beta / s;
-	double u_0 = ((y * v_0) / beta) - (B_13 * a * a / s);
+	double u_0 = ((y * v_0) / beta) - (B_13 * a * a / s);*/
+
+	double w = (b[0] * b[2] * b[5]) - (b[1] * b[1] * b[5]) - (b[0] * b[4] * b[4]) + (2 * (b[1] * b[3] * b[4])) - (b[2] * b[3] * b[3]);
+	double d = (b[0] * b[2]) - (b[1] * b[1]);
+
+	double a = sqrt(w / (d * b[0]));
+	double beta = sqrt(w / (d * d) * b[0]);
+	double y = sqrt(w / (d * d * b[0])) * b[1];
+	double u_0 = ((b[1] * b[4]) - (b[2] * b[3])) / d;
+	double v_0 = ((b[1] * b[3]) - (b[0] * b[4])) / d;
+
 
 	double K_data[3][3] = {
 		{  a ,   y,  u_0 },
@@ -509,8 +538,6 @@ void CameraCalibration::FindCameraIntrinsics(std::vector<std::vector<std::vector
 	// problem with V_mat
 	Mat V_mat(0, V_data[0].size(), DataType<float>::type);
 	camCalib.vector_to_mat(V_data, V_mat);
-
-	std::cout << V_mat << std::endl;
 
 	// find eigenvalue of V(T)V 1x6 matrix
 
@@ -540,17 +567,6 @@ void CameraCalibration::FindCameraIntrinsics(std::vector<std::vector<std::vector
 		eigenvectors.row(s_eigenval).copyTo(s_eigenv.row(0));
 	}
 
-	std::cout << "FindCameraIntrinsics::Eigenvectors: " << std::endl;
-	std::cout << eigenvectors << std::endl;
-	std::cout << "FindCameraIntrinsics::Eigenvalues: " << std::endl;
-	std::cout << eigenvalues << std::endl;
-	std::cout << "FindCameraIntrinsics::H vector: " << std::endl;
-	std::cout << s_eigenv << std::endl;
-
-
-	std::cout << "FindCameraIntrinsics::V^T*V: " << std::endl;
-	std::cout << VT_V << std::endl;
-
 	// Finally, find K
 	cv::Mat K(3, 3, CV_32F);
 	std::vector<float> s_eigenv_data;
@@ -560,43 +576,59 @@ void CameraCalibration::FindCameraIntrinsics(std::vector<std::vector<std::vector
 
 	std::cout << "FindCameraIntrinsics:: K: " << std::endl;
 	std::cout << K << std::endl;
+	std::cout << "" << std::endl;
+
+	// temp -> delete after use
+
+	float h0_temp[3] = { H_arr[0][0][0], H_arr[0][1][0], H_arr[0][2][0] };
+	float h1_temp[3] = { H_arr[0][0][1], H_arr[0][1][1], H_arr[0][2][1] };
+
+	cv::Mat h0_mat_temp(3, 1, CV_32F, h0_temp);
+	cv::Mat h1_mat_temp(3, 1, CV_32F, h1_temp);
+
+	cv::Mat K_inv = K.inv();
+
+	/*float B_1[3] = { s_eigenv_data[0], s_eigenv_data[1], s_eigenv_data[3] };
+	float B_2[3] = { s_eigenv_data[1], s_eigenv_data[2], s_eigenv_data[4] };
+	float B_3[3] = { s_eigenv_data[3], s_eigenv_data[4], s_eigenv_data[5] };*/
+
+	std::vector<float> B_1_d = { s_eigenv_data[0], s_eigenv_data[1], s_eigenv_data[3] };
+	std::vector<float> B_2_d = { s_eigenv_data[1], s_eigenv_data[2], s_eigenv_data[4] };
+	std::vector<float> B_3_d = { s_eigenv_data[3], s_eigenv_data[4], s_eigenv_data[5] };
+
+	cv::Mat B;
+
+	cv::Mat B_1(1, 3, CV_32F, B_1_d.data());
+	cv::Mat B_2(1, 3, CV_32F, B_2_d.data());
+	cv::Mat B_3(1, 3, CV_32F, B_3_d.data());
+
+	B.push_back(B_1);
+	B.push_back(B_2);
+	B.push_back(B_3);
+
+	K_inv.convertTo(K_inv, CV_32F);
+
+	// end temp
 
 	K.copyTo(K_out);
 }
 
 void CameraCalibration::ExtractViewParams(cv::Mat& K, std::vector<std::vector<float>>& H, cv::Mat& W_out)
 {
-	/*std::vector<float> h_0_data{ H[0][0], H[1][0], H[2][0] };
-	std::vector<float> h_1_data{ H[0][1], H[1][1], H[2][1] };
-	std::vector<float> h_2_data{ H[0][2], H[1][2], H[2][2] };*/
+	float h_0_data[]{ H[0][0], H[1][0], H[2][0] };
+	float h_1_data[]{ H[0][1], H[1][1], H[2][1] };
+	float h_2_data[]{ H[0][2], H[1][2], H[2][2] };
 
-	float h_0_data[] { H[0][0], H[1][0], H[2][0] };
-	float h_1_data[] { H[0][1], H[1][1], H[2][1] };
-	float h_2_data[] { H[0][2], H[1][2], H[2][2] };
+	cv::Mat h_0(3, 1, CV_32F, h_0_data);
+	cv::Mat h_1(3, 1, CV_32F, h_1_data);
+	cv::Mat h_2(3, 1, CV_32F, h_2_data);
 
-	cv::Mat h_0(3, 1, CV_32F, H[0].data());
-	cv::Mat h_1(3, 1, CV_32F, H[1].data());
-	cv::Mat h_2(3, 1, CV_32F, H[2].data());
-
-	/*h_0.convertTo(h_0, CV_64F);
-	h_1.convertTo(h_1, CV_64F);
-	h_2.convertTo(h_2, CV_64F);*/
-
-	std::cout << "CameraCalibration::ExtractViewParams:: h_0: " << h_0 << std::endl;
-
-	
 	cv::Mat K_inv(3, 3, CV_32F);
 	K_inv = K.inv();
-
 	K_inv.convertTo(K_inv, CV_32F);
-
-	std::cout << "CameraCalibration::ExtractViewParams:: K_inv: " << K_inv << std::endl;
-	std::cout << "CameraCalibration::ExtractViewParams:: h_0: " << h_0 << std::endl;
 
 	cv::Mat K_inv_h_0(1, 3, CV_32F);
 	K_inv_h_0 = K_inv* h_0;
-
-	std::cout << "CameraCalibration::ExtractViewParams:: K_inv_h_0: " << K_inv_h_0 << std::endl;
 
 	std::vector<std::vector<float>> s_denom;
 	camCalib.mat_to_vec(K_inv_h_0, s_denom);
@@ -622,50 +654,39 @@ void CameraCalibration::ExtractViewParams(cv::Mat& K, std::vector<std::vector<fl
 
 	cv::Mat W(0, 4, CV_32F);
 
-	std::cout << "CameraCalibration::ExtractViewParams:: r_0: " << r_0 << std::endl;
-	std::cout << "CameraCalibration::ExtractViewParams:: r_1: " << r_1 << std::endl;
-	std::cout << "CameraCalibration::ExtractViewParams:: r_2: " << r_2 << std::endl;
-	std::cout << "CameraCalibration::ExtractViewParams:: t: " << t << std::endl;
-
 	W.push_back(r_0.t());
 	W.push_back(r_1.t());
 	W.push_back(r_2.t());
 
-	cv::Point3f p;
+	// Converting 3x3 R matrix to 3x1 Rodrigues vector
 	cv::Mat R(3, 3, CV_32F);
 	R = W.t();
 
 	cv::Mat p_opencv(3, 1, CV_32F);
 	cv::Rodrigues(R, p_opencv);
 
+	// Finally we're adding translation parameteres
 	W.push_back(t.t());
-
-	std::cout << "CameraCalibration::ExtractViewParams: p: " << p << std::endl;
-	std::cout << "CameraCalibration::ExtractViewParams: p_opencv: " << p_opencv << std::endl;
 
 	W = W.t();
 
-	std::cout << "CameraCalibration::ExtractViewParams:: W: " << W << std::endl;
-
 	W.copyTo(W_out);
-
-	// create vector w/ params like this r_1,r_2, r_3, t
-
-
 }
 
-Point2f CameraCalibration::EstRadialDisplacement(cv::Mat& K, std::vector<cv::Mat>& W, std::vector<std::vector<Point3f>>& X, std::vector<std::vector<Point2f>>& U)
+Point2d CameraCalibration::EstRadialDisplacement(cv::Mat& K, std::vector<cv::Mat>& W, std::vector<std::vector<Point3f>>& X, std::vector<std::vector<Point2f>>& U)
 {
 	std::vector<std::vector<float>> A;
 	camCalib.mat_to_vec(K, A);
+
+	K.convertTo(K, CV_64F);
 
 	// A - est intrinsic camera params
 	// W - est extrinsic params, camera views
 	// X - model points
 	// U - observed sensor points
 
-	cv::Mat d_r (0,1,CV_32F);
-	std::vector<std::vector<float>> D_vec;
+	cv::Mat d_r (0,1,CV_64F);
+	std::vector<std::vector<double>> D_vec;
 
 	// go through each image
 	for (unsigned int i = 0; i < W.size(); i++)
@@ -673,43 +694,50 @@ Point2f CameraCalibration::EstRadialDisplacement(cv::Mat& K, std::vector<cv::Mat
 		for (unsigned int j = 0; j < X[i].size(); j++)
 		{
 			// normalized projection x = W * hom(X)
-			cv::Mat x_hom(3,1,CV_32F);
-			cv::Point2f x, d;
-			cv::Mat u(2, 1, CV_32F);
-			float r;
+			cv::Mat x_hom(3,1,CV_64F);
+			cv::Point2d x, d;
+			cv::Mat u(2, 1, CV_64F);
+			double r;
 
 			// center of image plane coords
 			float u_c = A[0][2];
 			float v_c = A[1][2];
 
-			float X_j_data[4][1]{ X[i][j].x, X[i][j].y, X[i][j].z, 1 };
+			double X_j_data[4][1]{ (double)X[i][j].x, (double)X[i][j].y, (double)X[i][j].z, (double)1 };
 
 
-			cv::Mat X_j(4, 1, CV_32F, X_j_data);
+			cv::Mat X_j(4, 1, CV_64F, X_j_data);
+
+			W[i].convertTo(W[i], CV_64F);
 
 			x_hom = W[i] * X_j;
-			x = { x_hom.at<float>(0,0) / x_hom.at<float>(2,0), x_hom.at<float>(1,0) / x_hom.at<float>(2,0) };
+			x = { x_hom.at<double>(0,0) / x_hom.at<double>(2,0), x_hom.at<double>(1,0) / x_hom.at<double>(2,0) };
 			r = sqrt( (x.x * x.x) + (x.y * x.y) );
 
-			cv::Rect rect(0, 0, 3, 2);
+			double norm_x[3] = { x.x, x.y, 1 };
+			cv::Mat mat_norm_x(3, 1, CV_64F, norm_x);
 
-			u = K(rect) * x_hom;
+			cv::Rect rect(0, 0, 3, 3);
+
+			u = K(rect) * mat_norm_x;
 			// calculate distance of sensor pixel from projection centre
-			d.x = u.at<float>(0, 0) - u_c;
-			d.y = u.at<float>(1, 0) - v_c;
+			// which is not u_c and v_c but 0,0
+			d.x = u.at<double>(0, 0);
+			d.y = u.at<double>(1, 0);
 
 			// difference between sensor observations and predictions
-			float d_r_data_u[1]{ U[i][j].x - u.at<float>(0, 0) };
-			float d_r_data_v[1]{ U[i][j].x - u.at<float>(1, 0) };
+			double d_r_data_u[1]{ (double)U[i][j].x - u.at<double>(0, 0) };
+			double d_r_data_v[1]{ (double)U[i][j].y - u.at<double>(1, 0) };
 
-			cv::Mat d_r_u(1, 1, CV_32F, d_r_data_u);
-			cv::Mat d_r_v(1, 1, CV_32F, d_r_data_v);
 
-			float r_2 = r * r;
-			float r_4 = r_2 * r * r;
+			cv::Mat d_r_u(1, 1, CV_64F, d_r_data_u);
+			cv::Mat d_r_v(1, 1, CV_64F, d_r_data_v);
 
-			std::vector<float> D_j{ d.x * r_2, d.x * r_4 };
-			std::vector<float> D_j_1{ d.y * r_2, d.y * r_4 };
+			double r_2 = r * r;
+			double r_4 = r_2 * r * r;
+
+			std::vector<double> D_j{ d.x * r_2, d.x * r_4 };
+			std::vector<double> D_j_1{ d.y * r_2, d.y * r_4 };
 
 			// update arrays
 			D_vec.push_back(D_j);
@@ -720,26 +748,81 @@ Point2f CameraCalibration::EstRadialDisplacement(cv::Mat& K, std::vector<cv::Mat
 		}
 	}
 
-	cv::Mat D(0, D_vec[0].size(), CV_32F);
-	camCalib.vector_to_mat(D_vec, D);
+	cv::Mat D(0, D_vec[0].size(), CV_64F);
+	camCalib.vector_to_mat_double(D_vec, D);
 
-	cv::Mat D_inv(2,2,CV_32F);
+	cv::Mat D_inv(2,2,CV_64F);
 	D_inv = D.inv(DECOMP_SVD);
 
-	cv::Mat k(2, 1, CV_32F);
+	cv::Mat k(2, 1, CV_64F);
 
 	// D * k = d -> k = D^-1 * d
 	k = D_inv * d_r;
 
-	cv::Point2f k_out{ k.at<float>(0,0),k.at<float>(1,0) };
-	return k_out;
+	cv::Mat check;
 
-	std::cout << "CameraCalibration::ExtractViewParams:: k_1: " << k << std::endl;
+	check = D * k;
+
+	cv::Point2d k_out{ k.at<double>(0,0),k.at<double>(1,0) };
+	return k_out;
 }
 
-void CameraCalibration::RefineParams(cv::Mat& A, cv::Point2f& k, std::vector<cv::Mat>& W_arr, std::vector<std::vector<Point3f>>& worldPoints, std::vector<std::vector<Point2f>>& imagePoints)
+void UnpackParams(cv::Mat P, cv::Mat& K_in, std::vector<cv::Mat>& W_arr, cv::Point2d& k_in)
 {
-	cv::Mat P;
+	// loop through P vector
+
+	// intrinsic matrix
+	double K_data[3][3]{
+		{ P.at<double>(0,0), P.at<double>(0,2), P.at<double>(0,3) },
+		{ (double)0 ,        P.at<double>(0,1),   P.at<double>(0,4) },
+		{  (double)0,           (double)0,           (double)1}
+	};
+
+	// radial displacement coefficients
+	double k_data[2]{ P.at<double>(0,5), P.at<double>(0,6) };
+
+	// traverse all views
+	for (int i = 0; i < (P.rows - 7) / 6; i++)
+	{
+		for (int j = 0; j < 6; j++)
+		{
+			int view_i = j + 6 * i + 7;
+
+			// Rodrigues rotation to Matrix rotation
+			double r_data[3]{ P.at<double>(view_i, 0), P.at<double>(view_i + 1, 0), P.at<double>(view_i + 2, 0) };
+			cv::Mat r(1, 3, CV_64F, r_data);
+			cv::Mat R(3, 3, CV_64F);
+
+			cv::Rodrigues(r, R);
+
+			double t_data[3]{
+				P.at<double>(view_i + 3, 0), P.at<double>(view_i + 4, 0), P.at<double>(view_i + 5, 0)
+			};
+			cv::Mat T(3, 1, CV_64F, t_data);
+
+			// put it all into Rt matrix also known as Intrinsic Parameters Matrix
+			cv::Mat Rt(3, 4, CV_64F);
+			cv::hconcat(R, T, Rt);
+
+			// update global H_arr object
+			W_arr[i] = Rt;
+		}
+	}
+	// insert data inside opencv Matrix format
+	cv::Mat K(3, 3, CV_64F, K_data);
+	cv::Point2d k;
+
+
+	K.copyTo(K_in);
+	k_in.x = k_data[0];
+	k_in.y = k_data[1];
+}
+
+
+void CameraCalibration::RefineParams(cv::Mat& A, cv::Point2d& k, std::vector<cv::Mat>& W_arr, std::vector<std::vector<Point3f>>& worldPoints, std::vector<std::vector<Point2f>>& imagePoints)
+{
+	/*cv::Mat P( 1, 7+( worldPoints.size() * 6 ), CV_32F );*/
+	cv::Mat P(1, 7, CV_64F);
 
 	std::vector<float> X_data;
 	std::vector<float> U_data;
@@ -765,4 +848,115 @@ void CameraCalibration::RefineParams(cv::Mat& A, cv::Point2f& k, std::vector<cv:
 
 	// Optimize here
 
+	const int N_VIEWS = worldPoints.size();
+	const int N_POINTS = worldPoints[0].size();
+	const int N_PARAMS = 7 + 6 * N_VIEWS;
+
+	auto criteria = cvTermCriteria(CV_TERMCRIT_EPS | CV_TERMCRIT_ITER, 80, DBL_EPSILON);
+	auto solver = CvLevMarq(N_PARAMS, U.cols, criteria, false);
+	
+	int iter = 0;
+
+	// convert from cv::Mat to cvMat, ughh
+	std::vector<double> P_data;
+	if (P.isContinuous())
+	{
+		P_data.assign((double*)P.data, (double*)P.data + P.total() * P.channels());
+	}
+
+	// convert to double
+
+	std::vector<double> d_P_data;
+
+	for (int i = 0; i < P_data.size(); i++)
+	{
+		d_P_data.push_back((double)P_data[i]);
+	}
+
+
+	CvMat param = cvMat(N_PARAMS, 1, CV_64F, d_P_data.data() );
+
+	cvCopy(&param, solver.param);
+
+	// inint J matrix
+	cv::Mat J(2 * N_VIEWS * N_POINTS, N_PARAMS, CV_64F);
+	cv::Mat err(1, 2 * N_VIEWS * N_POINTS, CV_64F);
+
+	std::cout << "FindParams:: LevMarq non-linear optimization has started" << std::endl;
+
+	while (true)
+	{
+		const CvMat* _param = 0;
+		CvMat* _jac = 0;
+		CvMat* _err = 0;
+
+		bool proceed = solver.update(_param, _jac, _err);
+
+		cvCopy(_param, &param);
+		std::cout << "--------------------------------------------------------" << std::endl;
+
+		std::cout << "iter=" << iter << " state=" << solver.state
+			<< " errNorm= " << solver.errNorm << std::endl;
+
+		if (!proceed || !_err) break;
+
+		if (_jac)
+		{
+			Mat p = Mat(param.rows, param.cols, CV_64F, param.data.db);
+			jacobian_fnc(J, X, p);
+
+			std::vector<double> tmp;
+			if (J.isContinuous())
+
+			{
+				tmp.assign((double*)J.data, (double*)J.data + J.total() * J.channels());
+			}
+
+			// traverse array and convert 1xN matrix to -> 1056x73
+
+			CvMat jac_tmp = cvMat(J.rows, J.cols, CV_64F);
+			cvCreateData(&jac_tmp);
+
+
+			for (int i = 0 ; i < N_POINTS*2*N_VIEWS ; i++)
+			{
+				for (int j = 0; j < N_VIEWS * 6 + 7; j++)
+				{
+					double fill = (double)J.at<double>(i, j);
+
+					CV_MAT_ELEM(jac_tmp, double, i, j) = fill;
+				}
+			}
+			
+			cvCopy(&jac_tmp, _jac);
+		}
+		if (_err)
+		{
+			Mat p = Mat(param.rows, param.cols, CV_64F, param.data.db);
+			error_fnc(err, X, U, p);
+			iter++;
+
+			std::vector<double> tmp;
+			if (err.isContinuous())
+			{
+				tmp.assign((double*)err.data, (double*)err.data + err.total() * err.channels());
+			}
+
+			// convert to double
+
+			double sum = 0.;
+
+			std::vector<double> tmp_d;
+			for (int i = 0; i < tmp.size(); i++)
+			{
+				tmp_d.push_back((double)tmp[i]);
+				sum += tmp[i] * tmp[i];
+			}
+
+			CvMat err_tmp = cvMat(err.cols, 1 , CV_64F, tmp_d.data());
+			cvCopy(&err_tmp, _err);
+		}
+	}
+
+	UnpackParams(P, A, W_arr, k);
 }
