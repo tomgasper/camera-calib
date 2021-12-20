@@ -96,7 +96,7 @@ void jacobian_fnc(cv::Mat J, cv::Mat& X, cv::Mat& P)
 	{
 		// current p
 		double p = P.at<double>(k, 0);
-		const double e = 2.2 * pow(10, -16.0);
+		const double e = 2.2 * pow(10, -5.0);
 		int r = 0;
 
 		double c = sqrt(e) * max(p, (double)1);
@@ -277,8 +277,3 @@ void unpack_params(cv::Mat& a, cv::Mat& w, cv::Mat& K_out, cv::Mat& Rt_out, cv::
 	Rt.copyTo(Rt_out);
 
 }
-
-//bool loadImagePairs(std::vector<std::vector<Point2f>>& imagePoints, std::vector<std::vector<Point3f>>& worldPoints)
-//{
-//
-//}

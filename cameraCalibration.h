@@ -30,12 +30,14 @@ namespace MY
 		bool vector_to_mat_double(std::vector<std::vector<T1>>& v, cv::Mat& mat);
 		void Build_L(std::vector<cv::Point2f> m, std::vector<cv::Point3f> M, std::vector<std::vector<float>>& L);
 		void Build_V(std::vector<std::vector<std::vector<float>>>&, std::vector<std::vector<float>>&);
-		void mat_to_vec(cv::Mat& mat, std::vector<std::vector<float>>& v);
+		template<typename T1>
+		void mat_to_vec(cv::Mat& mat, std::vector<std::vector<T1>>& v);
 
 		void FindCameraIntrinsics(std::vector<std::vector<std::vector<float>>>&, cv::Mat&);
-		void ExtractIntrinsicParams(std::vector<float>& b, cv::Mat& K_out);
+		void ExtractIntrinsicParams(std::vector<double>& b, cv::Mat& K_out);
 		void ExtractViewParams(cv::Mat&, std::vector<std::vector<float>>&, cv::Mat&);
 		void RefineParams(cv::Mat& A, cv::Point2d& k, std::vector<cv::Mat>& W_arr, std::vector<std::vector<cv::Point3f>>& worldPoints, std::vector<std::vector<cv::Point2f>>& imagePoints);
+		void EIGEN_RefineParams(cv::Mat& A, cv::Point2d& k, std::vector<cv::Mat>& W_arr, std::vector<std::vector<cv::Point3f>>& worldPoints, std::vector<std::vector<cv::Point2f>>& imagePoints);
 
 	friend std::ifstream& operator>> (std::ifstream& input, cv::Point3f& p)
 	{

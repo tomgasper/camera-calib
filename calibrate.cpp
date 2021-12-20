@@ -7,6 +7,10 @@
 #include <cstdio>
 #include "CameraCalibration.h"
 
+#include <Eigen>
+#include <unsupported/NonLinearOptimization>
+
+
 using namespace cv;
 MY::CameraCalibration cameraCalib;
 
@@ -47,19 +51,25 @@ MY::CameraCalibration cameraCalib;
 
 int main(int ac, char* av[])
 {
+
 	// Hard coded input data
+	bool imagePairsProvided = false;
+	const std::string MODEL_POINTS_DIR = "./data/model_points.txt";
+	const std::string IMAGE_POINTS_DIR = "./data/image_points.txt";
 	const std::string IMGS_DIR = "./data/";
 	const int CHECKERBOARD_WIDTH(8);
 	const int CHECKERBOARD_HEIGHT(6);
 
-	bool imagePairsProvided = true;
-	const std::string MODEL_POINTS_DIR = "./data/model_points.txt";
-	const std::string IMAGE_POINTS_DIR = "./data/image_points.txt";
-
 	std::vector<std::vector<Point2f>> imagePoints;
 	std::vector<std::vector<Point3f>> worldPoints;
-	std::vector<std::vector<std::vector<float>>> H_arr;
 
+	std::vector<std::vector<std::vector<float>>> H_arr;
+	cv::Mat K(3, 3, CV_64F);
+	std::vector<cv::Mat> W_arr;
+	cv::Point2d k;
+
+	// Check if user has provided image pairs
+	// if not then assume there are n images of k x l checkerboard provided inside "data" folder
 	if (imagePairsProvided)
 	{
 		bool dataRead = cameraCalib.ReadDataFromFile(MODEL_POINTS_DIR, IMAGE_POINTS_DIR, imagePoints, worldPoints);
@@ -70,6 +80,7 @@ int main(int ac, char* av[])
 	{
 		cameraCalib.FindPairs(IMGS_DIR, CHECKERBOARD_WIDTH, CHECKERBOARD_HEIGHT, worldPoints, imagePoints);
 	}
+
 
 	// Input found pairs to find homography matrix for each view
 	for (unsigned int i = 0; i < worldPoints.size(); i++)
@@ -88,8 +99,6 @@ int main(int ac, char* av[])
 	//     [ 0, fy, v_0 ]
 	//     [ 0,  0,  1  ]
 	// where fx, fy - focal length (in pixels) u_0, v_0 - principle point coordinates, y - skew between x and y axes
-
-	cv::Mat K(3,3,CV_64F);
 	cameraCalib.FindCameraIntrinsics(H_arr, K);
 
 	// Look for Extrinsinc Parameters for each view
@@ -101,9 +110,6 @@ int main(int ac, char* av[])
 	//	   [ r_1 r_2 r_3 t ]
 	//	   [               ]
 	//     [               ] 
-	
-
-	std::vector<cv::Mat> W_arr;
 	for (unsigned int i = 0; i < H_arr.size(); i++)
 	{
 		cv::Mat W_i;
@@ -112,9 +118,10 @@ int main(int ac, char* av[])
 		W_arr.push_back(W_i);
 	}
 	
-	cv::Point2d k;
+	// Estimate radial displacement coefficients
 	k = cameraCalib.EstRadialDisplacement(K, W_arr, worldPoints, imagePoints);
 
+	// Non-linear optimization
 	cameraCalib.RefineParams(K, k, W_arr, worldPoints, imagePoints);
 
 	std::cout << "----------------------------" << std::endl;

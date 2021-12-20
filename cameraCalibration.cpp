@@ -14,6 +14,9 @@
 #include <assert.h>
 #include <math.h>
 
+#include <Eigen>
+#include <unsupported/NonLinearOptimization>
+
 #include "worldPointsData.h"
 #include "imagePointsData.h"
 
@@ -120,9 +123,10 @@ void CameraCalibration::FindPairs(std::string imgs_dir, int C_WIDTH, int C_HEIGH
 
 			initWorldPoints.push_back(Point3f(j, i, 0));
 
+			
 			std::stringstream input;
 
-			input << "[" << j << "," << i << "," << 1 << "]";
+			input << "[" << j << ","  << i << "," << 0 << "]";
 			
 			m_points_stream << input.str();
 			m_points_stream << '\n';
@@ -165,16 +169,18 @@ void CameraCalibration::FindPairs(std::string imgs_dir, int C_WIDTH, int C_HEIGH
 			{
 				std::stringstream ss;
 
-				ss << "[" << corners[i].x << "," << corners[i].y << "]";
+				ss << "[" << std::setprecision(10) << corners[i].x << "," << std::setprecision(10) << corners[i].y << "]";
 				ss << '\n';
 				w_points_stream << ss.str();
 			}
 		}
-
 		imshow("Camera Calibration", gray);
 		cv::waitKey(10);
 	}
 
+	// cv::Mat cameraMatrix, distCoeffs, R, T;
+
+	// cv::calibrateCamera(wPoints, iPoints, cv::Size(gray.rows, gray.cols), cameraMatrix, distCoeffs, R, T);
 	w_points_stream.close();
 }
 void CameraCalibration::Build_L(std::vector<cv::Point2f> m, std::vector<cv::Point3f> M, std::vector<std::vector<float>>& L)
@@ -469,8 +475,8 @@ bool CameraCalibration::vector_to_mat_double(std::vector<std::vector<T1>>& v, cv
 }
 
 
-
-void CameraCalibration::mat_to_vec(cv::Mat& mat, std::vector<std::vector<float>>& v)
+template<typename T1>
+void CameraCalibration::mat_to_vec(cv::Mat& mat, std::vector<std::vector<T1>>& v)
 {
 	assert(v.empty());
 
@@ -480,7 +486,7 @@ void CameraCalibration::mat_to_vec(cv::Mat& mat, std::vector<std::vector<float>>
 	{
 		float* mat_row = mat.ptr<float>(m);
 
-		std::vector<float> empty_row;
+		std::vector<T1> empty_row;
 		v.push_back(empty_row);
 
 		for (unsigned int n = 0; n < mat.cols; n++)
@@ -490,7 +496,7 @@ void CameraCalibration::mat_to_vec(cv::Mat& mat, std::vector<std::vector<float>>
 	}
 }
 
-void CameraCalibration::ExtractIntrinsicParams(std::vector<float>& b, cv::Mat& K_out)
+void CameraCalibration::ExtractIntrinsicParams(std::vector<double>& b, cv::Mat& K_out)
 {
 	// b = [ B_11, B_12, B_22, B_13, B_23, B_33]^T
 
@@ -539,18 +545,22 @@ void CameraCalibration::FindCameraIntrinsics(std::vector<std::vector<std::vector
 	Mat V_mat(0, V_data[0].size(), DataType<float>::type);
 	camCalib.vector_to_mat(V_data, V_mat);
 
+	V_mat.convertTo(V_mat, CV_64F);
+
 	// find eigenvalue of V(T)V 1x6 matrix
 
 	// s_eigenv: eigenvectors corresponding to the smallest found eigenvalue
 	Mat VT_V = V_mat.t() * V_mat;
-	Mat eigenvectors(6, 6, CV_32F);
-	Mat eigenvalues(6, 1, CV_32F);
-	Mat s_eigenv(1, 6, CV_32F);
+	Mat eigenvectors(6, 6, CV_64F);
+	Mat eigenvalues(6, 1, CV_64F);
+	Mat s_eigenv(1, 6, CV_64F);
 
 	eigen(VT_V, eigenvalues, eigenvectors);
 
 	double s_eigenval = INFINITY;
+	int s_eigenval_indx = INFINITY;
 
+	// Find the smallest eigenvalue
 	for (int i = 0; i < eigenvalues.rows; i++)
 	{
 		const double* eignevalues_row = eigenvalues.ptr<double>(i);
@@ -558,19 +568,21 @@ void CameraCalibration::FindCameraIntrinsics(std::vector<std::vector<std::vector
 
 		if (curr_eigenval < s_eigenval)
 		{
-			s_eigenval = i;
+			s_eigenval = curr_eigenval;
+			s_eigenval_indx = i;
 		}
 	}
 
-	if (s_eigenval <= eigenvectors.rows)
+	// Eigenvector corresponding to the smallest eigenvalue is our best fit
+	if (s_eigenval_indx <= eigenvectors.rows)
 	{
-		eigenvectors.row(s_eigenval).copyTo(s_eigenv.row(0));
+		eigenvectors.row(s_eigenval_indx).copyTo(s_eigenv.row(0));
 	}
 
 	// Finally, find K
-	cv::Mat K(3, 3, CV_32F);
-	std::vector<float> s_eigenv_data;
-	s_eigenv_data.assign((float*)s_eigenv.datastart, (float*)s_eigenv.dataend);
+	cv::Mat K(3, 3, CV_64F);
+	std::vector<double> s_eigenv_data;
+	s_eigenv_data.assign((double*)s_eigenv.datastart, (double*)s_eigenv.dataend);
 
 	camCalib.ExtractIntrinsicParams(s_eigenv_data, K);
 
@@ -592,7 +604,7 @@ void CameraCalibration::FindCameraIntrinsics(std::vector<std::vector<std::vector
 	float B_2[3] = { s_eigenv_data[1], s_eigenv_data[2], s_eigenv_data[4] };
 	float B_3[3] = { s_eigenv_data[3], s_eigenv_data[4], s_eigenv_data[5] };*/
 
-	std::vector<float> B_1_d = { s_eigenv_data[0], s_eigenv_data[1], s_eigenv_data[3] };
+	/*std::vector<float> B_1_d = { s_eigenv_data[0], s_eigenv_data[1], s_eigenv_data[3] };
 	std::vector<float> B_2_d = { s_eigenv_data[1], s_eigenv_data[2], s_eigenv_data[4] };
 	std::vector<float> B_3_d = { s_eigenv_data[3], s_eigenv_data[4], s_eigenv_data[5] };
 
@@ -604,7 +616,7 @@ void CameraCalibration::FindCameraIntrinsics(std::vector<std::vector<std::vector
 
 	B.push_back(B_1);
 	B.push_back(B_2);
-	B.push_back(B_3);
+	B.push_back(B_3);*/
 
 	K_inv.convertTo(K_inv, CV_32F);
 
@@ -957,6 +969,197 @@ void CameraCalibration::RefineParams(cv::Mat& A, cv::Point2d& k, std::vector<cv:
 			cvCopy(&err_tmp, _err);
 		}
 	}
+
+	UnpackParams(P, A, W_arr, k);
+}
+
+//Eigen fcking around
+
+struct LMFunctor
+{
+	// 'm' pairs of (x, f(x))
+	cv::Mat* X = 0;
+	cv::Mat* U = 0;
+
+	Eigen::Map< Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> >* temp_jvec_type;
+
+	// Compute 'm' errors, one for each data point, for the given parameter values in 'x'
+	int operator()(const Eigen::VectorXd& x, Eigen::VectorXd& fvec) const
+	{
+		// 'x' has dimensions n x 1
+		// It contains the current estimates for the parameters.
+
+		// 'fvec' has dimensions m x 1
+		// It will contain the error for each data point.
+
+		// you need to provide the error vector to the optimizer here by assigning fvec
+
+		// convert from cv mat to eigen lib format
+
+		std::vector<double> p_vec(x.data(), x.data() + x.rows() * x.cols());
+		cv::Mat p_mat(p_vec.size(), 1, CV_64F, p_vec.data());
+
+		// std::vector<double> e_vec(fvec.data(), fvec.data() + fvec.rows() * fvec.cols());
+
+		cv::Mat e_mat( 1 , m, CV_64F );
+
+		error_fnc(e_mat, *X, *U, p_mat);
+
+		std::vector<std::vector<double>> e_vec_temp;
+		camCalib.mat_to_vec(e_mat, e_vec_temp);
+
+
+		Eigen::VectorXd temp_fvec = Eigen::Map<Eigen::VectorXd, Eigen::Unaligned>(e_vec_temp[0].data(), m);
+		fvec = temp_fvec;
+
+		return 0;
+	}
+
+	// Compute the jacobian of the errors
+	int df(const Eigen::VectorXd& x, Eigen::MatrixXd& fjac) const
+	{
+		// 'x' has dimensions n x 1
+		// It contains the current estimates for the parameters.
+
+		// 'fjac' has dimensions m x n
+		// It will contain the jacobian of the errors, calculated numerically in this case.
+
+		float epsilon;
+		epsilon = 1e-5f;
+
+		std::vector<double> p_vec(x.data(), x.data() + x.rows() * x.cols());
+		cv::Mat p_mat(p_vec.size(), 1, CV_64F, p_vec.data());
+
+		cv::Mat J(m, n, CV_64F);
+
+		jacobian_fnc(J, *X, p_mat);
+
+
+		std::vector<std::vector<double>> j_vec_temp;
+		camCalib.mat_to_vec(J, j_vec_temp);
+
+		Eigen::MatrixXd jac(m, n);
+
+		for (int i = 0; i < m; i++)
+		{
+			Eigen::VectorXd row_i = Eigen::Map<Eigen::VectorXd, Eigen::Unaligned>(j_vec_temp[i].data(), 73);
+			jac.row(i) = row_i;
+		}
+
+		// Eigen::MatrixXd jvec_mat = temp_jvec_type(j_vec_temp.data());
+
+		fjac = jac;
+
+		return 0;
+	}
+
+	// Number of data points, i.e. values.
+	int m;
+
+	// Returns 'm', the number of values.
+	int values() const { return m; }
+
+	// The number of parameters, i.e. inputs.
+	int n;
+
+	// Returns 'n', the number of inputs.
+	int inputs() const { return n; }
+
+};
+
+
+void CameraCalibration::EIGEN_RefineParams(cv::Mat& A, cv::Point2d& k, std::vector<cv::Mat>& W_arr, std::vector<std::vector<cv::Point3f>>& worldPoints, std::vector<std::vector<cv::Point2f>>& imagePoints)
+{
+	/*cv::Mat P( 1, 7+( worldPoints.size() * 6 ), CV_32F );*/
+	cv::Mat P(1, 7, CV_64F);
+
+	std::vector<float> X_data;
+	std::vector<float> U_data;
+
+	camCalib.ComposeParamVec(A, k, W_arr, P);
+
+	for (unsigned int i = 0; i < worldPoints.size(); i++)
+	{
+		for (unsigned int j = 0; j < worldPoints[i].size(); j++)
+		{
+			// its assumed that number of world points and image points is the same for every view
+			X_data.push_back(worldPoints[i][j].x);
+			X_data.push_back(worldPoints[i][j].y);
+
+			U_data.push_back(imagePoints[i][j].x);
+			U_data.push_back(imagePoints[i][j].y);
+		}
+	}
+
+	// init X and U matrices
+	cv::Mat X(1, X_data.size(), CV_32F, X_data.data());
+	cv::Mat U(1, U_data.size(), CV_32F, U_data.data());
+
+	// Optimize here
+
+	const int N_VIEWS = worldPoints.size();
+	const int N_POINTS = worldPoints[0].size();
+	const int N_PARAMS = 7 + 6 * N_VIEWS;
+
+	auto criteria = cvTermCriteria(CV_TERMCRIT_EPS | CV_TERMCRIT_ITER, 80, DBL_EPSILON);
+	auto solver = CvLevMarq(N_PARAMS, U.cols, criteria, false);
+
+	int iter = 0;
+
+	// convert from cv::Mat to cvMat, ughh
+	std::vector<double> P_data;
+	if (P.isContinuous())
+	{
+		P_data.assign((double*)P.data, (double*)P.data + P.total() * P.channels());
+	}
+
+	// convert to double
+
+	std::vector<double> d_P_data;
+
+	for (int i = 0; i < P_data.size(); i++)
+	{
+		d_P_data.push_back((double)P_data[i]);
+	}
+
+
+	CvMat param = cvMat(N_PARAMS, 1, CV_64F, d_P_data.data());
+
+	cvCopy(&param, solver.param);
+
+	// inint J matrix
+	cv::Mat J(2 * N_VIEWS * N_POINTS, N_PARAMS, CV_64F);
+	cv::Mat err(1, 2 * N_VIEWS * N_POINTS, CV_64F);
+
+	std::cout << "FindParams:: Eigen non-linear optimization has started" << std::endl;
+
+	int m = 2 * N_VIEWS * N_POINTS;
+	int n = N_PARAMS;
+
+	Eigen::VectorXd init_x = Eigen::Map<Eigen::VectorXd, Eigen::Unaligned>(d_P_data.data(), 73);
+
+	LMFunctor functor;
+	functor.X = &X;
+	functor.U = &U;
+	functor.m = m;
+	functor.n = n;
+
+	Eigen::LevenbergMarquardt<LMFunctor, double> lm(functor);
+
+	lm.parameters.maxfev = 2000;
+	lm.parameters.xtol = 1.0e-2;
+
+
+	int status = lm.minimize(init_x);
+	std::cout << "LM optimization status: " << status << std::endl;
+	std::cout << lm.iter << std::endl;
+	std::cout << lm.fnorm << std::endl;
+
+
+	/*while (true)
+	{
+
+	}*/
 
 	UnpackParams(P, A, W_arr, k);
 }
